@@ -5,9 +5,15 @@ Friday Image Pipeline — Persona likeness replication with approval loop.
 Usage:
   python pipeline.py generate --scene "Friday at her desk, coding, dramatic lighting"
   python pipeline.py generate --scene "Friday in a coffee shop, soft light" --model juggernaut
+  python pipeline.py generate --scene "..." --seed 1234567  # pin seed for reproducibility
   python pipeline.py list
   python pipeline.py iterate --id <run-id> --feedback "make her hair darker"
   python pipeline.py approve --id <run-id>
+  python pipeline.py rerun --id <run-id>             # exact rerun with same seed
+  python pipeline.py batch --scenes scene1.txt       # batch from file (one scene per line)
+  python pipeline.py batch --preset work             # batch from built-in scene pack
+  python pipeline.py compare --ids id1 id2 id3       # print side-by-side metadata
+  python pipeline.py export --id <run-id>            # copy run to named folder
 """
 
 import argparse
@@ -58,7 +64,7 @@ def save_state(state: dict):
         json.dump(state, f, indent=2)
 
 
-def build_workflow(positive: str, model_file: str, seed: int = -1, width: int = 1024, height: int = 1024, steps: int = 25) -> dict:
+def build_workflow(positive: str, model_file: str, seed: int = -1, width: int = 1024, height: int = 1024, steps: int = 25, batch_size: int = 1) -> dict:
     """Build a ComfyUI API workflow JSON."""
     if seed == -1:
         import random
@@ -86,7 +92,7 @@ def build_workflow(positive: str, model_file: str, seed: int = -1, width: int = 
         },
         "5": {
             "class_type": "EmptyLatentImage",
-            "inputs": {"width": width, "height": height, "batch_size": 1}
+            "inputs": {"width": width, "height": height, "batch_size": batch_size}
         },
         "6": {
             "class_type": "CLIPTextEncode",
@@ -175,7 +181,7 @@ def cmd_generate(args):
     print(f"   Run ID: {run_id}")
     print(f"   Prompt: {full_prompt[:120]}...")
 
-    workflow = build_workflow(full_prompt, model_file, steps=args.steps)
+    workflow = build_workflow(full_prompt, model_file, seed=getattr(args, 'seed', -1), steps=args.steps)
     seed = workflow["3"]["inputs"]["seed"]
 
     # Save the prompt info
@@ -341,6 +347,131 @@ def cmd_list(args):
         print(f"{run_id:<10} {run['version']:<3} {run['status']:<12} {approved:<9} {scene_short}")
 
 
+def cmd_rerun(args):
+    """Rerun a past run with the exact same seed (reproducible)."""
+    state = load_state()
+    parent = state["runs"].get(args.id)
+    if not parent:
+        print(f"❌ Run not found: {args.id}")
+        sys.exit(1)
+
+    # Reconstruct args-like object
+    class RerunArgs:
+        scene = parent["scene"]
+        model = parent["model"]
+        steps = parent["steps"]
+        timeout = 300
+        seed = parent["seed"]
+
+    print(f"🔁 Rerunning {args.id} with seed {parent['seed']}")
+    cmd_generate(RerunArgs())
+
+
+def cmd_batch(args):
+    """Batch generate from a file of scenes or a preset pack."""
+    from scenes import get_pack, SCENE_PACKS
+
+    if args.preset:
+        try:
+            scenes = get_pack(args.preset)
+        except ValueError as e:
+            print(f"❌ {e}")
+            sys.exit(1)
+        print(f"📦 Batch: {len(scenes)} scenes from preset '{args.preset}'")
+    elif args.scenes_file:
+        scenes_path = Path(args.scenes_file)
+        if not scenes_path.exists():
+            print(f"❌ File not found: {args.scenes_file}")
+            sys.exit(1)
+        scenes = [line.strip() for line in scenes_path.read_text().splitlines() if line.strip()]
+        print(f"📄 Batch: {len(scenes)} scenes from {args.scenes_file}")
+    else:
+        print("❌ Provide --preset <pack> or --scenes-file <file.txt>")
+        sys.exit(1)
+
+    if args.dry_run:
+        print("\n[DRY RUN] Would generate:")
+        for i, scene in enumerate(scenes, 1):
+            print(f"  {i}. {scene[:80]}")
+        return
+
+    results = []
+    for i, scene in enumerate(scenes, 1):
+        print(f"\n[{i}/{len(scenes)}] {scene[:60]}...")
+
+        bargs = argparse.Namespace(
+            scene=scene,
+            model=args.model,
+            steps=args.steps,
+            timeout=args.timeout,
+            seed=-1,
+        )
+        try:
+            cmd_generate(bargs)
+            results.append(("ok", scene))
+        except Exception as e:
+            print(f"   ⚠️ Failed: {e}")
+            results.append(("error", scene))
+
+    print(f"\n📊 Batch complete: {sum(1 for r, _ in results if r == 'ok')}/{len(scenes)} succeeded")
+
+
+def cmd_compare(args):
+    """Print side-by-side metadata for multiple runs."""
+    state = load_state()
+    ids = args.ids
+    runs = [state["runs"].get(rid) for rid in ids]
+    missing = [ids[i] for i, r in enumerate(runs) if r is None]
+    if missing:
+        print(f"❌ Run(s) not found: {', '.join(missing)}")
+        sys.exit(1)
+
+    print(f"\n{'Field':<20}", end="")
+    for rid in ids:
+        print(f"  {rid:<18}", end="")
+    print()
+    print("-" * (20 + len(ids) * 20))
+
+    fields = ["version", "status", "approved", "model", "seed", "steps", "created_at"]
+    for field in fields:
+        print(f"{field:<20}", end="")
+        for run in runs:
+            val = str(run.get(field, ""))[:16]
+            print(f"  {val:<18}", end="")
+        print()
+
+    print(f"\n{'scene':<20}")
+    for rid, run in zip(ids, runs):
+        print(f"  {rid}: {run['scene'][:80]}")
+
+
+def cmd_export(args):
+    """Copy a run's images to a named export folder."""
+    state = load_state()
+    run = state["runs"].get(args.id)
+    if not run:
+        print(f"❌ Run not found: {args.id}")
+        sys.exit(1)
+
+    name = args.name or f"export_{args.id}_v{run['version']}"
+    export_dir = OUTPUT_DIR / "exports" / name
+    export_dir.mkdir(parents=True, exist_ok=True)
+
+    for img_path in run["images"]:
+        src = Path(img_path)
+        if src.exists():
+            dst = export_dir / src.name
+            shutil.copy2(src, dst)
+            print(f"✅ {src.name} → {dst}")
+
+    # Save metadata alongside
+    meta_path = export_dir / "meta.json"
+    with open(meta_path, "w") as f:
+        json.dump(run, f, indent=2)
+    print(f"📄 Metadata: {meta_path}")
+    print(f"\nExported to: {export_dir}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Friday Image Pipeline")
     sub = parser.add_subparsers(dest="cmd")
@@ -350,6 +481,7 @@ def main():
     gen.add_argument("--model", default=DEFAULT_MODEL, choices=list(AVAILABLE_MODELS.keys()))
     gen.add_argument("--steps", type=int, default=25)
     gen.add_argument("--timeout", type=int, default=300)
+    gen.add_argument("--seed", type=int, default=-1, help="Pin seed for reproducibility (-1 = random)")
 
     it = sub.add_parser("iterate", help="Iterate on an existing run with feedback")
     it.add_argument("--id", required=True, help="Run ID to iterate from")
@@ -359,6 +491,24 @@ def main():
     ap.add_argument("--id", required=True)
 
     sub.add_parser("list", help="List all runs")
+
+    rr = sub.add_parser("rerun", help="Exact rerun with same seed")
+    rr.add_argument("--id", required=True)
+
+    bt = sub.add_parser("batch", help="Batch generate from scene pack or file")
+    bt.add_argument("--preset", default=None, help="Scene pack name (work/casual/professional/creative)")
+    bt.add_argument("--scenes-file", dest="scenes_file", default=None, help="Text file with one scene per line")
+    bt.add_argument("--model", default=DEFAULT_MODEL, choices=list(AVAILABLE_MODELS.keys()))
+    bt.add_argument("--steps", type=int, default=25)
+    bt.add_argument("--timeout", type=int, default=300)
+    bt.add_argument("--dry-run", dest="dry_run", action="store_true", help="Print scenes without generating")
+
+    cmp = sub.add_parser("compare", help="Compare metadata for multiple runs")
+    cmp.add_argument("--ids", nargs="+", required=True, help="Run IDs to compare")
+
+    exp = sub.add_parser("export", help="Export a run's images to a named folder")
+    exp.add_argument("--id", required=True)
+    exp.add_argument("--name", default=None, help="Export folder name")
 
     args = parser.parse_args()
     if not args.cmd:
@@ -373,7 +523,16 @@ def main():
         cmd_approve(args)
     elif args.cmd == "list":
         cmd_list(args)
+    elif args.cmd == "rerun":
+        cmd_rerun(args)
+    elif args.cmd == "batch":
+        cmd_batch(args)
+    elif args.cmd == "compare":
+        cmd_compare(args)
+    elif args.cmd == "export":
+        cmd_export(args)
 
 
 if __name__ == "__main__":
     main()
+
