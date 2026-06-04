@@ -25,8 +25,9 @@ from urllib.parse import parse_qs, urlparse
 # Re-use the pipeline logic
 sys.path.insert(0, str(Path(__file__).parent))
 from pipeline import (
+    get_base_prompt, get_negative_prompt, load_persona_config, save_persona_config,
     OUTPUT_DIR, STATE_FILE, AVAILABLE_MODELS, DEFAULT_MODEL,
-    FRIDAY_BASE_PROMPT, NEGATIVE_PROMPT,
+    
     load_state, save_state, build_workflow,
     queue_prompt, wait_for_completion, fetch_image,
     COMFY_URL,
@@ -49,7 +50,7 @@ def run_job(job: dict):
     save_state(state)
 
     try:
-        positive = f"{FRIDAY_BASE_PROMPT}, {job['scene']}"
+        positive = get_base_prompt() + ', ' + job.get('scene', '')
         model_file = AVAILABLE_MODELS.get(job.get("model", DEFAULT_MODEL), AVAILABLE_MODELS[DEFAULT_MODEL])
         seed = job.get("seed", -1)
         workflow = build_workflow(positive, model_file, seed=seed)
@@ -241,6 +242,15 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
     <div class="section-title">Scene Presets</div>
     <div class="presets" id="presets-container"></div>
+
+    <div class="section-title" style="margin-top:24px">⚙️ Persona Config</div>
+    <div class="generate-form" id="persona-form">
+      <label style="font-size:11px;color:#888;display:block;margin-bottom:4px">Base prompt (who Friday is)</label>
+      <textarea id="persona-base" rows="4" placeholder="Loading..."></textarea>
+      <label style="font-size:11px;color:#888;display:block;margin:8px 0 4px">Negative prompt</label>
+      <textarea id="persona-negative" rows="3" placeholder="Loading..."></textarea>
+      <button class="btn btn-primary" style="margin-top:8px;width:100%" onclick="savePersona()">Save Persona</button>
+    </div>
   </div>
 
   <div class="main">
@@ -476,6 +486,27 @@ document.addEventListener('keydown', e => {
 renderPresets();
 poll();
 pollInterval = setInterval(poll, 3000);
+
+// Persona config
+async function loadPersona() {
+  const resp = await fetch('/api/persona');
+  const cfg = await resp.json();
+  document.getElementById('persona-base').value = cfg.base_prompt || '';
+  document.getElementById('persona-negative').value = cfg.negative_prompt || '';
+}
+async function savePersona() {
+  const base_prompt = document.getElementById('persona-base').value.trim();
+  const negative_prompt = document.getElementById('persona-negative').value.trim();
+  const resp = await fetch('/api/persona', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({base_prompt, negative_prompt})
+  });
+  const data = await resp.json();
+  if (data.ok) showToast('Persona saved ✅');
+  else showToast('Error saving persona ❌');
+}
+loadPersona();
 </script>
 </body>
 </html>
@@ -517,6 +548,9 @@ class Handler(BaseHTTPRequestHandler):
 
         elif path == "/api/state":
             self.send_json(load_state())
+
+        elif path == "/api/persona":
+            self.send_json(load_persona_config())
 
         elif path.startswith("/image/"):
             # /image/<run_id>/<filename>
@@ -593,6 +627,16 @@ class Handler(BaseHTTPRequestHandler):
                     shutil.copy2(src, approved_dir / f"{run_id}_{src.name}")
             save_state(state)
             self.send_json({"ok": True})
+
+        elif path == "/api/persona":
+            body = self.read_body()
+            cfg = load_persona_config()
+            if "base_prompt" in body:
+                cfg["base_prompt"] = body["base_prompt"].strip()
+            if "negative_prompt" in body:
+                cfg["negative_prompt"] = body["negative_prompt"].strip()
+            save_persona_config(cfg)
+            self.send_json({"ok": True, "config": cfg})
 
         elif path.startswith("/api/unapprove/"):
             run_id = path.split("/")[-1]

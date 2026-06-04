@@ -31,17 +31,48 @@ from datetime import datetime
 COMFY_URL = os.environ.get("COMFY_URL", "http://127.0.0.1:8188")
 OUTPUT_DIR = Path(os.environ.get("PIPELINE_OUTPUT_DIR", "./output"))
 STATE_FILE = OUTPUT_DIR / "state.json"
+CONFIG_FILE = OUTPUT_DIR / "persona_config.json"
 
-# Friday's base character description — consistent across all scenes
-FRIDAY_BASE_PROMPT = (
+# Defaults — overridden by persona_config.json if it exists
+_DEFAULT_BASE_PROMPT = (
     "Friday, a young woman, AI assistant persona, sleek dark hair, intelligent eyes, "
     "professional but approachable, modern aesthetic, high quality, detailed face"
 )
-
-NEGATIVE_PROMPT = (
+_DEFAULT_NEGATIVE_PROMPT = (
     "blurry, low quality, distorted face, deformed, ugly, bad anatomy, "
     "watermark, text, signature, duplicate, multiple people"
 )
+
+
+def load_persona_config() -> dict:
+    """Load persona config from file, falling back to defaults."""
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    if CONFIG_FILE.exists():
+        with open(CONFIG_FILE) as f:
+            cfg = json.load(f)
+        cfg.setdefault("base_prompt", _DEFAULT_BASE_PROMPT)
+        cfg.setdefault("negative_prompt", _DEFAULT_NEGATIVE_PROMPT)
+        return cfg
+    return {"base_prompt": _DEFAULT_BASE_PROMPT, "negative_prompt": _DEFAULT_NEGATIVE_PROMPT}
+
+
+def save_persona_config(cfg: dict):
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    with open(CONFIG_FILE, "w") as f:
+        json.dump(cfg, f, indent=2)
+
+
+def get_base_prompt() -> str:
+    return load_persona_config()["base_prompt"]
+
+
+def get_negative_prompt() -> str:
+    return load_persona_config()["negative_prompt"]
+
+
+# Module-level aliases for backward compat (loaded once — use get_base_prompt() for live values)
+FRIDAY_BASE_PROMPT = _DEFAULT_BASE_PROMPT
+NEGATIVE_PROMPT = _DEFAULT_NEGATIVE_PROMPT
 
 AVAILABLE_MODELS = {
     "animagine": "animagine-xl-4.0.safetensors",
@@ -105,7 +136,7 @@ def build_workflow(positive: str, model_file: str, seed: int = -1, width: int = 
             "class_type": "CLIPTextEncode",
             "inputs": {
                 "clip": ["4", 1],
-                "text": NEGATIVE_PROMPT
+                "text": get_negative_prompt()
             }
         },
         "8": {
@@ -515,9 +546,26 @@ def main():
     gal.add_argument("--embed", action="store_true", help="Embed images as base64 (self-contained file)")
     gal.add_argument("--serve", action="store_true", help="Serve gallery on http://localhost:8765")
 
+    cfg_cmd = sub.add_parser("config", help="View or edit persona config (base/negative prompts)")
+    cfg_cmd.add_argument("--set-base", dest="set_base", default=None, help="Set base prompt text")
+    cfg_cmd.add_argument("--set-negative", dest="set_negative", default=None, help="Set negative prompt text")
+
     args = parser.parse_args()
     if not args.cmd:
         parser.print_help()
+        return
+
+    if args.cmd == "config":
+        cfg = load_persona_config()
+        if args.set_base:
+            cfg["base_prompt"] = args.set_base
+        if args.set_negative:
+            cfg["negative_prompt"] = args.set_negative
+        if args.set_base or args.set_negative:
+            save_persona_config(cfg)
+            print("✅ Persona config saved.")
+        print(f"\n📝 Base prompt:\n  {cfg['base_prompt']}")
+        print(f"\n🚫 Negative prompt:\n  {cfg['negative_prompt']}")
         return
 
     if args.cmd == "generate":
