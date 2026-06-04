@@ -28,7 +28,8 @@ from pipeline import (
     get_base_prompt, get_negative_prompt, load_persona_config, save_persona_config,
     OUTPUT_DIR, STATE_FILE, AVAILABLE_MODELS, DEFAULT_MODEL,
     
-    load_state, save_state, build_workflow, build_faceid_workflow, get_reference_image_b64,
+    load_state, save_state, build_workflow, build_faceid_workflow,
+    get_reference_image_path, upload_reference_image,
     queue_prompt, wait_for_completion, fetch_image,
     COMFY_URL,
 )
@@ -56,10 +57,21 @@ def run_job(job: dict):
         use_faceid = job.get("faceid", False)
 
         if use_faceid:
-            ref_b64 = get_reference_image_b64()
-            if ref_b64:
-                workflow = build_faceid_workflow(positive, model_file, ref_b64, seed=seed)
-                actual_seed = workflow["8"]["inputs"]["seed"]
+            ref_path = get_reference_image_path()
+            if ref_path:
+                try:
+                    ref_filename = upload_reference_image(ref_path)
+                    workflow = build_faceid_workflow(positive, model_file, ref_filename, seed=seed)
+                    actual_seed = workflow["8"]["inputs"]["seed"]
+                except Exception as upload_err:
+                    # Fall back to standard if upload fails
+                    print(f"FaceID upload failed: {upload_err}, falling back to standard")
+                    workflow = build_workflow(positive, model_file, seed=seed)
+                    actual_seed = workflow["3"]["inputs"]["seed"]
+                    state = load_state()
+                    if run_id in state["runs"]:
+                        state["runs"][run_id]["faceid"] = False
+                        save_state(state)
             else:
                 # Fall back to standard if no reference set
                 workflow = build_workflow(positive, model_file, seed=seed)

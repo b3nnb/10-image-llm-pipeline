@@ -158,8 +158,56 @@ def build_workflow(positive: str, model_file: str, seed: int = -1, width: int = 
     }
 
 
-def build_faceid_workflow(positive: str, model_file: str, reference_image_b64: str, seed: int = -1, width: int = 1024, height: int = 1024, steps: int = 25, faceid_weight: float = 0.85) -> dict:
+def upload_reference_image(image_path: str) -> str:
+    """Upload a local image file to ComfyUI's input folder.
+
+    Returns the filename as registered in ComfyUI (for use with LoadImage node).
+    """
+    import mimetypes
+    import io
+    p = Path(image_path)
+    if not p.exists():
+        raise FileNotFoundError(f"Reference image not found: {image_path}")
+
+    mime = mimetypes.guess_type(str(p))[0] or "image/png"
+    boundary = "----FridayPipelineBoundary"
+    body = (
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="image"; filename="{p.name}"\r\n'
+        f"Content-Type: {mime}\r\n\r\n"
+    ).encode() + p.read_bytes() + f"\r\n--{boundary}--\r\n".encode()
+
+    req = urllib.request.Request(
+        f"{COMFY_URL}/upload/image",
+        data=body,
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req) as resp:
+        result = json.loads(resp.read())
+    # ComfyUI returns {"name": "filename.png", "subfolder": "", "type": "input"}
+    return result["name"]
+
+
+def get_reference_image_path() -> "str | None":
+    """Return the local path to the FaceID reference image, or None if not set."""
+    cfg = load_persona_config()
+    ref_path = cfg.get("reference_image")
+    if not ref_path:
+        return None
+    p = Path(ref_path)
+    if not p.exists():
+        print(f"⚠️  Reference image not found: {ref_path}")
+        return None
+    return str(p)
+
+
+def build_faceid_workflow(positive: str, model_file: str, reference_image_filename: str, seed: int = -1, width: int = 1024, height: int = 1024, steps: int = 25, faceid_weight: float = 0.85) -> dict:
     """Build a ComfyUI workflow with IPAdapterFaceID for consistent face reference.
+
+    Args:
+        reference_image_filename: filename as returned by upload_reference_image()
+            (the name ComfyUI registered in its input folder)
 
     Requires:
     - ComfyUI_IPAdapter_plus custom node
@@ -176,10 +224,10 @@ def build_faceid_workflow(positive: str, model_file: str, reference_image_b64: s
             "class_type": "CheckpointLoaderSimple",
             "inputs": {"ckpt_name": model_file}
         },
-        # Load reference image from base64
+        # Load reference image by filename (uploaded to ComfyUI input folder)
         "2": {
-            "class_type": "ETN_LoadImageBase64",
-            "inputs": {"image": reference_image_b64}
+            "class_type": "LoadImage",
+            "inputs": {"image": reference_image_filename}
         },
         # Unified IPAdapter loader for FaceID
         "3": {
@@ -250,17 +298,16 @@ def build_faceid_workflow(positive: str, model_file: str, reference_image_b64: s
 
 
 def get_reference_image_b64() -> "str | None":
-    """Load the FaceID reference image as base64, or None if not set."""
+    """Load the FaceID reference image as base64, or None if not set.
+
+    Deprecated: use get_reference_image_path() + upload_reference_image() instead.
+    Kept for backward compat.
+    """
     import base64
-    cfg = load_persona_config()
-    ref_path = cfg.get("reference_image")
+    ref_path = get_reference_image_path()
     if not ref_path:
         return None
-    p = Path(ref_path)
-    if not p.exists():
-        print(f"⚠️  Reference image not found: {ref_path}")
-        return None
-    with open(p, "rb") as f:
+    with open(ref_path, "rb") as f:
         return base64.b64encode(f.read()).decode("utf-8")
 
 
@@ -336,14 +383,23 @@ def cmd_generate(args):
 
     # FaceID mode: use reference image for consistent face
     use_faceid = getattr(args, "faceid", False)
-    ref_b64 = None
+    ref_filename = None
     if use_faceid:
-        ref_b64 = get_reference_image_b64()
-        if not ref_b64:
+        ref_path = get_reference_image_path()
+        if not ref_path:
             print("⚠️  FaceID requested but no reference image set. Run:")
             print("    python pipeline.py set-reference --image <path/to/face.png>")
             print("   Falling back to standard generation.")
             use_faceid = False
+        else:
+            try:
+                print("   Uploading reference image to ComfyUI...")
+                ref_filename = upload_reference_image(ref_path)
+                print(f"   Reference uploaded as: {ref_filename}")
+            except Exception as e:
+                print(f"⚠️  Failed to upload reference image: {e}")
+                print("   Falling back to standard generation.")
+                use_faceid = False
 
     run_id = str(uuid.uuid4())[:8]
     run_dir = OUTPUT_DIR / run_id
@@ -354,9 +410,9 @@ def cmd_generate(args):
     print(f"   Run ID: {run_id}")
     print(f"   Prompt: {full_prompt[:120]}...")
 
-    if use_faceid and ref_b64:
+    if use_faceid and ref_filename:
         print("   Mode: FaceID (reference image locked)")
-        workflow = build_faceid_workflow(full_prompt, model_file, ref_b64, seed=getattr(args, 'seed', -1), steps=args.steps)
+        workflow = build_faceid_workflow(full_prompt, model_file, ref_filename, seed=getattr(args, 'seed', -1), steps=args.steps)
         seed = workflow["8"]["inputs"]["seed"]
     else:
         workflow = build_workflow(full_prompt, model_file, seed=getattr(args, 'seed', -1), steps=args.steps)
@@ -374,7 +430,7 @@ def cmd_generate(args):
         "status": "generating",
         "version": 1,
         "parent_id": None,
-        "faceid": use_faceid and bool(ref_b64),
+        "faceid": use_faceid and bool(ref_filename),
         "created_at": datetime.utcnow().isoformat(),
         "images": [],
         "approved": False,
