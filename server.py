@@ -28,7 +28,7 @@ from pipeline import (
     get_base_prompt, get_negative_prompt, load_persona_config, save_persona_config,
     OUTPUT_DIR, STATE_FILE, AVAILABLE_MODELS, DEFAULT_MODEL,
     
-    load_state, save_state, build_workflow,
+    load_state, save_state, build_workflow, build_faceid_workflow, get_reference_image_b64,
     queue_prompt, wait_for_completion, fetch_image,
     COMFY_URL,
 )
@@ -53,12 +53,26 @@ def run_job(job: dict):
         positive = get_base_prompt() + ', ' + job.get('scene', '')
         model_file = AVAILABLE_MODELS.get(job.get("model", DEFAULT_MODEL), AVAILABLE_MODELS[DEFAULT_MODEL])
         seed = job.get("seed", -1)
-        workflow = build_workflow(positive, model_file, seed=seed)
+        use_faceid = job.get("faceid", False)
+
+        if use_faceid:
+            ref_b64 = get_reference_image_b64()
+            if ref_b64:
+                workflow = build_faceid_workflow(positive, model_file, ref_b64, seed=seed)
+                actual_seed = workflow["8"]["inputs"]["seed"]
+            else:
+                # Fall back to standard if no reference set
+                workflow = build_workflow(positive, model_file, seed=seed)
+                actual_seed = workflow["3"]["inputs"]["seed"]
+                state = load_state()
+                if run_id in state["runs"]:
+                    state["runs"][run_id]["faceid"] = False
+                    save_state(state)
+        else:
+            workflow = build_workflow(positive, model_file, seed=seed)
+            actual_seed = workflow["3"]["inputs"]["seed"]
 
         prompt_id = queue_prompt(workflow)
-        # Extract the seed that was actually used
-        actual_seed = workflow["3"]["inputs"]["seed"]
-
         history = wait_for_completion(prompt_id)
         run_dir = OUTPUT_DIR / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
@@ -105,7 +119,8 @@ def worker_thread():
 
 
 def enqueue_generation(scene: str, model: str = DEFAULT_MODEL, seed: int = -1,
-                        parent_id: str | None = None, version: int = 1) -> str:
+                        parent_id: "str | None" = None, version: int = 1,
+                        use_faceid: bool = False) -> str:
     """Add a generation to the queue and return its run_id."""
     run_id = str(uuid.uuid4())[:8]
     state = load_state()
@@ -118,13 +133,14 @@ def enqueue_generation(scene: str, model: str = DEFAULT_MODEL, seed: int = -1,
         "parent_id": parent_id,
         "status": "queued",
         "approved": False,
+        "faceid": use_faceid,
         "images": [],
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
     save_state(state)
 
     with _job_lock:
-        _job_queue.append({"run_id": run_id, "scene": scene, "model": model, "seed": seed})
+        _job_queue.append({"run_id": run_id, "scene": scene, "model": model, "seed": seed, "faceid": use_faceid})
 
     return run_id
 
@@ -236,6 +252,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           <option value="juggernaut">Juggernaut XL (photorealistic)</option>
           <option value="animagine">Animagine XL (anime/illustrated)</option>
         </select>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:#ccc;cursor:pointer">
+          <input type="checkbox" id="faceid-toggle" style="cursor:pointer">
+          FaceID
+        </label>
         <button class="btn btn-primary" onclick="submitGenerate()">Generate</button>
       </div>
     </div>
@@ -411,10 +431,11 @@ async function submitGenerate() {
   const scene = document.getElementById('scene-input').value.trim();
   if (!scene) { showToast('Enter a scene description first.'); return; }
   const model = document.getElementById('model-select').value;
+  const faceid = document.getElementById('faceid-toggle').checked;
   const resp = await fetch('/api/generate', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ scene, model })
+    body: JSON.stringify({ scene, model, faceid })
   });
   if (resp.ok) {
     const data = await resp.json();
@@ -583,10 +604,11 @@ class Handler(BaseHTTPRequestHandler):
             scene = body.get("scene", "").strip()
             model = body.get("model", DEFAULT_MODEL)
             seed = int(body.get("seed", -1))
+            use_faceid = bool(body.get("faceid", False))
             if not scene:
                 self.send_json({"error": "scene required"}, 400)
                 return
-            run_id = enqueue_generation(scene, model=model, seed=seed)
+            run_id = enqueue_generation(scene, model=model, seed=seed, use_faceid=use_faceid)
             self.send_json({"run_id": run_id, "status": "queued"})
 
         elif path == "/api/iterate":
