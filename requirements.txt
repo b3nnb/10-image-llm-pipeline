@@ -1,0 +1,19 @@
+# Friday Image Pipeline — Python dependencies
+# All stdlib only — no pip packages required.
+# This file documents external tooling, not Python packages.
+
+# Runtime requirements (system-level):
+#   Python >= 3.9
+#   ComfyUI running at http://127.0.0.1:8188 (or COMFY_URL env var)
+
+# Optional for FaceID:
+#   ComfyUI custom nodes: ComfyUI-IPAdapter-plus (IPAdapterUnifiedLoaderFaceID)
+#   Model files: ip-adapter-faceid-plusv2_sdxl.bin + _lora.safetensors
+
+# To install ComfyUI (if not already):
+#   git clone https://github.com/comfyanonymous/ComfyUI
+#   pip install -r ComfyUI/requirements.txt
+
+# SDXL Checkpoint options (drop into ComfyUI/models/checkpoints/):
+#   juggernaut-xl-v9.safetensors  — photorealistic portraits (default)
+#   animagine-xl-4.0.safetensors  — anime / stylized

@@ -21,6 +21,12 @@ python pipeline.py generate --scene "Friday in a coffee shop, warm afternoon lig
 # List all runs
 python pipeline.py list
 
+# Run stats summary (counts, model breakdown, recent activity)
+python pipeline.py stats
+
+# Health-check the whole setup (ComfyUI, models, GPU, Web UI)
+python pipeline.py check
+
 # Iterate on an existing run with feedback
 python pipeline.py iterate --id abc12345 --feedback "make the background more bokeh, warmer tones"
 

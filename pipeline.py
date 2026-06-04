@@ -707,6 +707,167 @@ def cmd_export(args):
     print(f"\nExported to: {export_dir}")
 
 
+def cmd_stats(_args=None):
+    """Print a stats summary of all pipeline runs."""
+    state = load_state()
+    runs = state.get("runs", {})
+
+    if not runs:
+        print("No runs yet. Generate some with: python pipeline.py generate --scene \"...\"")
+        return
+
+    total = len(runs)
+    approved = [r for r in runs.values() if r.get("approved")]
+    pending = [r for r in runs.values() if not r.get("approved") and r.get("status") == "done"]
+    generating = [r for r in runs.values() if r.get("status") == "generating"]
+    by_model: dict = {}
+    by_scene: dict = {}
+    for r in runs.values():
+        m = r.get("model", "unknown")
+        by_model[m] = by_model.get(m, 0) + 1
+        scene = r.get("scene", "")[:60]
+        by_scene[scene] = by_scene.get(scene, 0) + 1
+
+    print(f"\n📊 Pipeline Stats\n")
+    print(f"  Total runs:      {total}")
+    print(f"  Approved:        {len(approved)}")
+    print(f"  Pending review:  {len(pending)}")
+    if generating:
+        print(f"  Generating:      {len(generating)}")
+
+    if by_model:
+        print(f"\n  By model:")
+        for model, count in sorted(by_model.items(), key=lambda x: -x[1]):
+            print(f"    {model}: {count}")
+
+    print(f"\n  Unique scenes:   {len(by_scene)}")
+
+    # Top scenes by generation count
+    top_scenes = sorted(by_scene.items(), key=lambda x: -x[1])[:5]
+    if any(c > 1 for _, c in top_scenes):
+        print(f"\n  Most iterated scenes:")
+        for scene, count in top_scenes:
+            if count > 1:
+                print(f"    x{count}  {scene}...")
+
+    # Latest runs
+    sorted_runs = sorted(runs.values(), key=lambda r: r.get("created_at", ""), reverse=True)[:5]
+    print(f"\n  Recent runs:")
+    for r in sorted_runs:
+        ts = r.get("created_at", "")[:16].replace("T", " ")
+        approved_mark = " ✅" if r.get("approved") else ""
+        print(f"    {r.get('id', r.get('run_id', '?'))[:8]}  v{r.get('version', 1)}  {ts}{approved_mark}  {r.get('scene', '')[:55]}...")
+
+    print()
+
+
+def cmd_check(_args=None):
+    """Health-check the full pipeline setup and report status."""
+    import urllib.request as urequest
+    import urllib.error
+    ok = True
+
+    def check(label: str, passed: bool, detail: str = ""):
+        symbol = "✅" if passed else "❌"
+        line = f"  {symbol}  {label}"
+        if detail:
+            line += f"  — {detail}"
+        print(line)
+        return passed
+
+    print("\n🔍 Friday Image Pipeline — Health Check\n")
+
+    # 1. ComfyUI reachability
+    comfy_ok = False
+    stats: dict = {}
+    try:
+        req = urequest.urlopen(f"{COMFY_URL}/system_stats", timeout=5)
+        stats = json.loads(req.read())
+        version = stats.get("system", {}).get("comfyui_version", "unknown")
+        comfy_ok = check("ComfyUI reachable", True, f"v{version} @ {COMFY_URL}")
+    except Exception as e:
+        check("ComfyUI reachable", False, f"{COMFY_URL} — {e}")
+        ok = False
+
+    # 2. GPU info
+    if comfy_ok:
+        try:
+            devices = stats.get("devices", [])
+            if devices:
+                d = devices[0]
+                check("GPU detected", True, f"{d.get('name', '?')} — {d.get('vram_free', 0)//1024//1024}MB free / {d.get('vram_total', 0)//1024//1024}MB total")
+        except Exception:
+            pass
+
+    # 3. Models installed in ComfyUI
+    if comfy_ok:
+        try:
+            oi_req = urequest.urlopen(f"{COMFY_URL}/object_info/CheckpointLoaderSimple", timeout=5)
+            oi = json.loads(oi_req.read())
+            installed = oi.get("CheckpointLoaderSimple", {}).get("input", {}).get("required", {}).get("ckpt_name", [{}])[0]
+            for key, filename in AVAILABLE_MODELS.items():
+                found = filename in installed
+                check(f"Model: {key} ({filename})", found)
+                if not found:
+                    ok = False
+        except Exception as e:
+            check("Model list", False, str(e))
+            ok = False
+
+    # 4. FaceID node availability (optional — just warn)
+    if comfy_ok:
+        try:
+            faceid_req = urequest.urlopen(f"{COMFY_URL}/object_info/IPAdapterUnifiedLoaderFaceID", timeout=5)
+            faceid_data = json.loads(faceid_req.read())
+            has_faceid = bool(faceid_data)
+            check("FaceID node (IPAdapterUnifiedLoaderFaceID)", has_faceid, "optional — needed for --faceid flag")
+        except Exception:
+            check("FaceID node (IPAdapterUnifiedLoaderFaceID)", False, "optional — install ComfyUI-IPAdapter-plus if needed")
+
+    # 5. State file + run count
+    state = load_state()
+    runs = state.get("runs", {})
+    approved = sum(1 for r in runs.values() if r.get("approved"))
+    check("Output state", True, f"{len(runs)} total runs, {approved} approved")
+
+    # 6. Output directory writable
+    try:
+        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        test_file = OUTPUT_DIR / ".write_test"
+        test_file.write_text("ok")
+        test_file.unlink()
+        check("Output dir writable", True, str(OUTPUT_DIR))
+    except Exception as e:
+        check("Output dir writable", False, str(e))
+        ok = False
+
+    # 7. Persona config
+    cfg = load_persona_config()
+    base_len = len(cfg.get("base_prompt", ""))
+    ref = cfg.get("reference_image")
+    ref_status = ""
+    if ref:
+        ref_path = Path(ref)
+        ref_status = f"FaceID ref: {ref_path.name} ({'found' if ref_path.exists() else 'MISSING'})"
+    check("Persona config", base_len > 0, ref_status or f"base prompt: {base_len} chars")
+
+    # 8. Web UI
+    try:
+        ui_req = urequest.urlopen("http://localhost:8765/api/state", timeout=3)
+        ui_data = json.loads(ui_req.read())
+        ui_runs = len(ui_data.get("runs", {}))
+        check("Web UI (localhost:8765)", True, f"serving {ui_runs} runs")
+    except Exception:
+        check("Web UI (localhost:8765)", False, "not running — start with ./start-ui.sh")
+
+    print()
+    if ok:
+        print("✅ All checks passed.\n")
+    else:
+        print("⚠️  Some checks failed — see above.\n")
+    return ok
+
+
 def main():
     parser = argparse.ArgumentParser(description="Friday Image Pipeline")
     sub = parser.add_subparsers(dest="cmd")
@@ -757,6 +918,9 @@ def main():
 
     setref = sub.add_parser("set-reference", help="Set FaceID reference image for consistent likeness")
     setref.add_argument("--image", required=True, help="Path to reference face image (PNG/JPG)")
+
+    sub.add_parser("check", help="Health-check: verify ComfyUI, models, GPU, Web UI, and pipeline state")
+    sub.add_parser("stats", help="Show run statistics: total, approved, by model, recent activity")
 
     args = parser.parse_args()
     if not args.cmd:
@@ -814,6 +978,10 @@ def main():
         if args.serve:
             extra.append("--serve")
         subprocess.run([sys.executable, str(Path(__file__).parent / "gallery.py")] + extra)
+    elif args.cmd == "check":
+        cmd_check(args)
+    elif args.cmd == "stats":
+        cmd_stats(args)
 
 
 if __name__ == "__main__":
