@@ -546,6 +546,84 @@ def cmd_iterate(args):
     print(f"  python pipeline.py iterate --id {run_id} --feedback 'more adjustments'")
 
 
+def cmd_review(args):
+    """Interactive review of pending (unapproved) runs.
+
+    For each unapproved run:
+      - Prints scene, model, seed, image path
+      - Asks: [a]pprove / [s]kip / [q]uit
+    Use --non-interactive to auto-list pending runs without prompting.
+    """
+    state = load_state()
+    runs = state.get("runs", {})
+    pending = [r for r in runs.values() if not r.get("approved")]
+    pending.sort(key=lambda r: r.get("created_at", ""))
+
+    if not pending:
+        print("🎉 No pending runs — all images have been reviewed.")
+        return
+
+    print(f"📋 Pending review: {len(pending)} run(s)\n")
+
+    if args.non_interactive:
+        for r in pending:
+            imgs = r.get("images", [])
+            img_str = imgs[0] if imgs else "(no image)"
+            print(f"  📋 {r['id'][:8]}  v{r.get('version', 1)}  {r.get('model', '?')}")
+            print(f"     Scene: {r.get('scene', '')[:80]}")
+            print(f"     Image: {img_str}")
+            print()
+        print(f"Run `python pipeline.py approve --id <id>` to approve a run.")
+        return
+
+    approved_count = 0
+    for i, r in enumerate(pending, 1):
+        imgs = r.get("images", [])
+        img_str = imgs[0] if imgs else "(no image)"
+
+        print(f"─── [{i}/{len(pending)}] {r['id'][:8]} ──────────────────────────────")
+        print(f"  Scene : {r.get('scene', '')}")
+        print(f"  Model : {r.get('model', '?')}  │  Steps: {r.get('steps', '?')}  │  Seed: {r.get('seed', '?')}")
+        print(f"  Image : {img_str}")
+        print()
+
+        while True:
+            try:
+                choice = input("  [a]pprove / [s]kip / [q]uit  › ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                print("\n  Quitting review.")
+                save_state(state)
+                return
+
+            if choice in ("a", "approve"):
+                r["approved"] = True
+                approved_dir = OUTPUT_DIR / "approved"
+                approved_dir.mkdir(exist_ok=True)
+                for img_path in imgs:
+                    src = Path(img_path)
+                    if src.exists():
+                        dst = approved_dir / f"{r['id'][:8]}_v{r.get('version',1)}_{src.name}"
+                        shutil.copy2(src, dst)
+                        print(f"  ✅ Approved  →  {dst}")
+                approved_count += 1
+                break
+            elif choice in ("s", "skip"):
+                print("  ⏭  Skipped")
+                break
+            elif choice in ("q", "quit"):
+                print("  Quitting review.")
+                save_state(state)
+                print(f"\n  Approved {approved_count} run(s) this session.")
+                return
+            else:
+                print("  Type 'a', 's', or 'q'")
+
+        print()
+
+    save_state(state)
+    print(f"✅ Review complete — approved {approved_count}/{len(pending)} run(s).")
+
+
 def cmd_approve(args):
     state = load_state()
     run = state["runs"].get(args.id)
@@ -922,6 +1000,10 @@ def main():
     sub.add_parser("check", help="Health-check: verify ComfyUI, models, GPU, Web UI, and pipeline state")
     sub.add_parser("stats", help="Show run statistics: total, approved, by model, recent activity")
 
+    rev = sub.add_parser("review", help="Interactive review of pending (unapproved) runs")
+    rev.add_argument("--non-interactive", dest="non_interactive", action="store_true",
+                     help="List pending runs without prompting (useful for scripts/cron)")
+
     args = parser.parse_args()
     if not args.cmd:
         parser.print_help()
@@ -982,6 +1064,8 @@ def main():
         cmd_check(args)
     elif args.cmd == "stats":
         cmd_stats(args)
+    elif args.cmd == "review":
+        cmd_review(args)
 
 
 if __name__ == "__main__":

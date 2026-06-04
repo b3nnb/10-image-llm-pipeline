@@ -27,6 +27,10 @@ python pipeline.py stats
 # Health-check the whole setup (ComfyUI, models, GPU, Web UI)
 python pipeline.py check
 
+# Interactive review of pending (unapproved) runs: see metadata, approve or skip
+python pipeline.py review
+python pipeline.py review --non-interactive   # list only, no prompts
+
 # Iterate on an existing run with feedback
 python pipeline.py iterate --id abc12345 --feedback "make the background more bokeh, warmer tones"
 
