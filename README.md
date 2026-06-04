@@ -53,6 +53,11 @@ python pipeline.py compare --ids id1 id2 id3
 # Export a run to a named folder
 python pipeline.py export --id abc12345 --name friday-hero
 
+# 🗂️ Export approved images as a LoRA training dataset (kohya_ss format)
+python pipeline.py lora-export
+python pipeline.py lora-export --trigger friday --repeats 15 --out ~/lora-dataset
+python pipeline.py lora-export --all   # include unapproved runs too
+
 # 🖼️ Generate an HTML gallery of all runs (open in browser)
 python pipeline.py gallery
 python pipeline.py gallery --embed              # self-contained (images embedded as base64)
@@ -67,6 +72,43 @@ python pipeline.py gallery --serve              # serve on http://localhost:8765
 | `casual` | reading, park, rooftop bar, kitchen |
 | `professional` | boardroom, startup office, conference, podcast |
 | `creative` | drawing tablet, music studio, photography, design studio |
+
+## LoRA Training Dataset Export
+
+When you have enough approved images, use `lora-export` to package them into a
+[kohya_ss](https://github.com/bmaltais/kohya_ss)-compatible dataset for training
+a Friday Likeness LoRA (card #38):
+
+```bash
+# Export approved images only (default)
+python pipeline.py lora-export
+
+# Custom trigger word and training repeats
+python pipeline.py lora-export --trigger friday --repeats 15 --out ~/friday-lora
+
+# Include all done runs (not just approved)
+python pipeline.py lora-export --all
+```
+
+Output structure:
+
+```
+lora_dataset/
+  img/
+    10_friday/          ← training images + per-image .txt captions
+  log/
+  model/
+  dataset_config.toml  ← pass to kohya_ss --dataset_config
+  training_config.toml ← SDXL LoRA hyperparams (fp16, AdamW8bit, 10 epochs)
+  README.md            ← full training walkthrough
+  manifest.json        ← export metadata
+```
+
+Captions are auto-generated from the scene description with the trigger word prepended:
+`friday, at her desk coding, cyberpunk neon lighting`
+
+The more approved images you accumulate, the better the LoRA will generalise.
+Aim for **20–30 images** across varied scenes, lighting, and angles before training.
 
 ## Gallery Viewer
 
