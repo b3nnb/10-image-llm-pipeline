@@ -510,6 +510,11 @@ def main():
     exp.add_argument("--id", required=True)
     exp.add_argument("--name", default=None, help="Export folder name")
 
+    gal = sub.add_parser("gallery", help="Generate an HTML gallery of all runs")
+    gal.add_argument("--output", default="gallery.html", help="Output HTML file (default: gallery.html)")
+    gal.add_argument("--embed", action="store_true", help="Embed images as base64 (self-contained file)")
+    gal.add_argument("--serve", action="store_true", help="Serve gallery on http://localhost:8765")
+
     args = parser.parse_args()
     if not args.cmd:
         parser.print_help()
@@ -531,6 +536,17 @@ def main():
         cmd_compare(args)
     elif args.cmd == "export":
         cmd_export(args)
+    elif args.cmd == "gallery":
+        import subprocess
+        import sys
+        extra = []
+        if args.output != "gallery.html":
+            extra += ["--output", args.output]
+        if args.embed:
+            extra.append("--embed")
+        if args.serve:
+            extra.append("--serve")
+        subprocess.run([sys.executable, str(Path(__file__).parent / "gallery.py")] + extra)
 
 
 if __name__ == "__main__":
