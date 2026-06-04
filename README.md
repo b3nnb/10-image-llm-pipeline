@@ -68,6 +68,44 @@ python pipeline.py gallery --serve              # serve on http://localhost:8765
 - `--embed` for a fully self-contained `.html` file (easy to share)
 - `--serve` to launch a local server and open in browser
 
+## Deployment
+
+### Run manually
+
+```bash
+./start-ui.sh       # starts on http://localhost:8765
+./start-ui.sh 9000  # custom port
+```
+
+### Auto-start with systemd (recommended)
+
+Runs the UI on login, restarts on failure, waits for ComfyUI to be ready first.
+
+```bash
+./install-service.sh                                # install + enable
+systemctl --user start friday-image-pipeline        # start now
+systemctl --user status friday-image-pipeline       # check status
+journalctl --user -u friday-image-pipeline -f       # tail logs
+```
+
+### Docker Compose
+
+If you want the pipeline UI containerized (ComfyUI still runs on host):
+
+```bash
+docker compose up -d          # start
+docker compose logs -f        # logs
+docker compose down           # stop
+```
+
+ComfyUI must be accessible at port 8188 on the host. The compose file sets
+`extra_hosts: host.docker.internal:host-gateway` so the container can reach it.
+
+To point at a different ComfyUI:
+```bash
+COMFY_URL=http://192.168.1.10:8188 docker compose up -d
+```
+
 ## Environment Variables
 
 | Variable | Default | Description |

@@ -1,0 +1,18 @@
+[Unit]
+Description=Friday Image Pipeline — Web UI for persona image generation
+After=comfyui.service
+Wants=comfyui.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Documents/code/10-image-llm-pipeline
+ExecStart=%h/Documents/code/10-image-llm-pipeline/start-ui.sh 8765
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=20
+KillMode=mixed
+Environment=COMFY_URL=http://127.0.0.1:8188
+Environment=PIPELINE_OUTPUT_DIR=%h/Documents/code/10-image-llm-pipeline/output
+
+[Install]
+WantedBy=default.target
