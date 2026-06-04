@@ -1,0 +1,37 @@
+version: "3.9"
+
+# Friday Image Pipeline — Docker Compose
+#
+# Runs the pipeline Web UI as a container alongside ComfyUI.
+# NOTE: ComfyUI still requires GPU access. This compose file assumes
+# ComfyUI is already accessible (either locally on the host or another container).
+#
+# Usage:
+#   docker compose up -d
+#   Open http://localhost:8765
+
+services:
+  pipeline-ui:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: friday-image-pipeline
+    restart: unless-stopped
+    ports:
+      - "8765:8765"
+    volumes:
+      # Persist generated images and state between restarts
+      - ./output:/app/output
+    environment:
+      # Point to ComfyUI — use host.docker.internal if ComfyUI is on the host
+      - COMFY_URL=${COMFY_URL:-http://host.docker.internal:8188}
+      - PIPELINE_OUTPUT_DIR=/app/output
+    extra_hosts:
+      # Lets the container reach the host's ComfyUI service
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8765/api/state"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
