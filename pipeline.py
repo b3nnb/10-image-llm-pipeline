@@ -1004,6 +1004,13 @@ def main():
     rev.add_argument("--non-interactive", dest="non_interactive", action="store_true",
                      help="List pending runs without prompting (useful for scripts/cron)")
 
+    lora = sub.add_parser("lora-export", help="Export approved images as a kohya_ss LoRA training dataset")
+    lora.add_argument("--trigger", default="friday", help="Trigger token (default: friday)")
+    lora.add_argument("--repeats", type=int, default=10, help="kohya_ss num_repeats (default: 10)")
+    lora.add_argument("--out", default=None, help="Output directory (default: output/lora_dataset)")
+    lora.add_argument("--all", dest="include_all", action="store_true",
+                      help="Include all done runs, not just approved")
+
     args = parser.parse_args()
     if not args.cmd:
         parser.print_help()
@@ -1066,6 +1073,26 @@ def main():
         cmd_stats(args)
     elif args.cmd == "review":
         cmd_review(args)
+    elif args.cmd == "lora-export":
+        from lora_export import export_lora_dataset
+        out = Path(args.out).expanduser().resolve() if args.out else (OUTPUT_DIR / "lora_dataset")
+        approved_only = not args.include_all
+        print(f"\n🗂  Friday LoRA Dataset Export")
+        print(f"   Trigger  : {args.trigger}")
+        print(f"   Repeats  : {args.repeats}")
+        print(f"   Filter   : {'approved only' if approved_only else 'all done runs'}")
+        print(f"   Output   : {out}\n")
+        result = export_lora_dataset(out, args.trigger, args.repeats, approved_only)
+        if not result["ok"]:
+            print(f"\n❌ Export failed: {result.get('reason')}")
+            raise SystemExit(1)
+        print(f"\n✅ Dataset ready — {result['n_images']} images exported")
+        print(f"   Runs: {', '.join(result['run_ids'])}")
+        print(f"\n📁 {result['out_dir']}/")
+        print(f"   img/{args.repeats}_{args.trigger}/   ← training images + captions")
+        print(f"   dataset_config.toml          ← pass to --dataset_config")
+        print(f"   training_config.toml         ← kohya_ss SDXL LoRA hyperparams")
+        print(f"   README.md                    ← full training instructions")
 
 
 if __name__ == "__main__":
