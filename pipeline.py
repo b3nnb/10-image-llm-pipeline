@@ -624,6 +624,44 @@ def cmd_review(args):
     print(f"✅ Review complete — approved {approved_count}/{len(pending)} run(s).")
 
 
+def cmd_bulk_approve(args):
+    """Approve all done, unapproved runs in bulk.
+
+    Useful for cron/CI when you want to move all pending runs to approved
+    without interactive input. Optionally filter by a scene substring.
+    """
+    state = load_state()
+    runs = state.get("runs", {})
+    approved_dir = OUTPUT_DIR / "approved"
+    approved_dir.mkdir(exist_ok=True)
+
+    pending = [
+        r for r in runs.values()
+        if not r.get("approved") and r.get("status") == "done"
+    ]
+
+    if getattr(args, "scene_filter", None):
+        pending = [r for r in pending if args.scene_filter.lower() in r.get("scene", "").lower()]
+
+    if not pending:
+        print("No pending runs to approve.")
+        return
+
+    count = 0
+    for run in pending:
+        run["approved"] = True
+        for img_path in run.get("images", []):
+            src = Path(img_path)
+            if src.exists():
+                dst = approved_dir / f"{run['id'][:8]}_v{run.get('version',1)}_{src.name}"
+                shutil.copy2(src, dst)
+        count += 1
+        print(f"  ✅ {run['id'][:8]}  {run.get('scene','')[:60]}")
+
+    save_state(state)
+    print(f"\n✅ Approved {count} run(s). Images copied to {approved_dir}")
+
+
 def cmd_approve(args):
     state = load_state()
     run = state["runs"].get(args.id)
@@ -1011,6 +1049,10 @@ def main():
     lora.add_argument("--all", dest="include_all", action="store_true",
                       help="Include all done runs, not just approved")
 
+    ba = sub.add_parser("bulk-approve", help="Approve all pending done runs (non-interactive)")
+    ba.add_argument("--scene-filter", dest="scene_filter", default=None,
+                    help="Only approve runs whose scene contains this substring")
+
     args = parser.parse_args()
     if not args.cmd:
         parser.print_help()
@@ -1093,6 +1135,9 @@ def main():
         print(f"   dataset_config.toml          ← pass to --dataset_config")
         print(f"   training_config.toml         ← kohya_ss SDXL LoRA hyperparams")
         print(f"   README.md                    ← full training instructions")
+    elif args.cmd == "bulk-approve":
+        cmd_bulk_approve(args)
+
 
 
 if __name__ == "__main__":

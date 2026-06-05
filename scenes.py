@@ -29,6 +29,18 @@ SCENE_PACKS = {
         "Friday with a camera around her neck, urban photography setting, golden hour",
         "Friday designing on a large display, 3D model visible on screen, modern design studio",
     ],
+    # LoRA training optimised — close-up portraits with diverse lighting & expressions.
+    # These scenes are face-forward and detail-rich, ideal for identity training.
+    "portrait": [
+        "Friday portrait, close-up, looking directly at camera, soft studio lighting, neutral background, high detail",
+        "Friday portrait, three-quarter view, natural window light, slight smile, sharp focus on face",
+        "Friday portrait, dramatic side lighting, dark background, cinematic, professional headshot style",
+        "Friday portrait, warm golden hour light, outdoor setting, hair catching light, candid expression",
+        "Friday portrait, cool blue ambient light, tech environment, focused expression, shallow depth of field",
+        "Friday portrait, overhead soft-box lighting, white background, clean professional look, minimal",
+        "Friday portrait, rim light from behind, moody atmosphere, looking slightly off-camera, thoughtful",
+        "Friday portrait, bright natural daylight, smiling, casual setting, relaxed and approachable",
+    ],
 }
 
 def list_packs():
